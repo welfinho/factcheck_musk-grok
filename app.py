@@ -3,16 +3,13 @@ import json
 import datetime as dt
 import requests
 import streamlit as st
-from dotenv import load_dotenv
 
 # ───────────── 1. ENV ────────────────────────────────────────────────────────
-load_dotenv(".env", override=False)
 
-X_TOKEN   = os.getenv("X_BEARER_TOKEN")
-GROK_KEY  = os.getenv("GROK_API_KEY")
-MODEL_ID  = os.getenv("GROK_MODEL_ID", "grok-3-beta")
-ELON_ID   = os.getenv("ELON_ID", "44196397")
-GROK_EP   = "https://api.x.ai/v1/chat/completions"
+X_TOKEN   = st.secrets["X_BEARER_TOKEN"]
+GROK_KEY  = st.secrets["GROK_API_KEY"]
+MODEL_ID  = st.secrets.get("GROK_MODEL_ID", "grok-3-beta")
+ELON_ID   = st.secrets.get("ELON_ID", "44196397")
 
 if not (X_TOKEN and GROK_KEY):
     st.error("❌  X_BEARER_TOKEN or GROK_API_KEY missing. Check .env / Secrets.")
