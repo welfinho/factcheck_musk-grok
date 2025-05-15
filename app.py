@@ -8,10 +8,10 @@ from dotenv import load_dotenv
 # ───────────── 1. ENV ────────────────────────────────────────────────────────
 load_dotenv(".env", override=False)
 
-X_TOKEN   = os.getenv("X_BEARER_TOKEN")          # Twitter/X Bearer token
-GROK_KEY  = os.getenv("GROK_API_KEY")            # xAI server key
+X_TOKEN   = os.getenv("X_BEARER_TOKEN")
+GROK_KEY  = os.getenv("GROK_API_KEY")
 MODEL_ID  = os.getenv("GROK_MODEL_ID", "grok-3-beta")
-ELON_ID   = os.getenv("ELON_ID", "44196397")     # @elonmusk
+ELON_ID   = os.getenv("ELON_ID", "44196397")
 GROK_EP   = "https://api.x.ai/v1/chat/completions"
 
 if not (X_TOKEN and GROK_KEY):
@@ -20,66 +20,72 @@ if not (X_TOKEN and GROK_KEY):
 
 # ───────────── 2. Helpers ────────────────────────────────────────────────────
 def fetch_tweets(max_results=50):
-    url = f"https://api.twitter.com/2/users/{ELON_ID}/tweets"
-    headers = {"Authorization": f"Bearer {X_TOKEN}"}
-    params  = {
-        "max_results": max_results,
-        "tweet.fields": "created_at,referenced_tweets"
-    }
-    r = requests.get(url, headers=headers, params=params, timeout=15)
-    if r.status_code != 200:
-        raise RuntimeError(f"{r.status_code}: {r.text[:120]}")
-    return r.json().get("data", [])
+    try:
+        url = f"https://api.twitter.com/2/users/{ELON_ID}/tweets"
+        headers = {"Authorization": f"Bearer {X_TOKEN}"}
+        params = {
+            "max_results": max_results,
+            "tweet.fields": "created_at,referenced_tweets"
+        }
+        r = requests.get(url, headers=headers, params=params, timeout=15)
+        if r.status_code == 429:
+            st.error("📉 Twitter API request limit reached (Free Tier). Please wait 15 minutes and try again.")
+            st.stop()
+        elif r.status_code != 200:
+            st.error(f"❌ Twitter API error ({r.status_code}). Try again later.")
+            st.stop()
+        return r.json().get("data", [])
+    except Exception:
+        st.error("⚠️ Could not fetch tweets from Twitter. Please try again later.")
+        st.stop()
 
 def looks_empty(tweet):
-    """True if tweet is only a link or very short/emoji."""
     txt = tweet["text"].strip()
     return txt.startswith("http") or len(txt) < 10
 
-@st.cache_data(ttl=1800)      # 30‑min cache
+@st.cache_data(ttl=1800)
 def get_checked(n=5):
     tweets = fetch_tweets(50)
-
-    # ---- keep: originals + quotes/replies with comment; skip pure retweets/empty
     filtered = []
     for t in tweets:
         rt_info = t.get("referenced_tweets")
-        if rt_info and any(r["type"] == "retweeted" for r in rt_info) \
-                and t["text"].startswith("RT "):
-            continue                       # pure retweet
+        if rt_info and any(r["type"] == "retweeted" for r in rt_info) and t["text"].startswith("RT "):
+            continue
         if looks_empty(t):
-            continue                       # link-only or emoji
+            continue
         filtered.append(t)
 
     if not filtered:
         return []
 
-    # ---- Grok fact‑check
     checked = []
     for tw in filtered[:n]:
         body = {
             "model": MODEL_ID,
             "messages": [
-                {"role": "system",
-                 "content": ("Return JSON {conclusion:true|false|uncertain,"
-                             "reason,sources}")},
+                {"role": "system", "content": "Return JSON {conclusion:true|false|uncertain,reason,sources}"},
                 {"role": "user", "content": tw["text"]},
             ],
         }
         try:
             r = requests.post(
                 GROK_EP,
-                headers={"Authorization": f"Bearer {GROK_KEY}",
-                         "Content-Type": "application/json"},
+                headers={"Authorization": f"Bearer {GROK_KEY}", "Content-Type": "application/json"},
                 json=body,
                 timeout=30,
             )
             r.raise_for_status()
             tw["fact"] = json.loads(r.json()["choices"][0]["message"]["content"])
-        except Exception as e:
+        except requests.exceptions.HTTPError as e:
+            if r.status_code == 429:
+                reason = "xAI request limit reached. Try again in 15 minutes."
+            else:
+                reason = f"xAI API error ({r.status_code})."
+            tw["fact"] = {"conclusion": "uncertain", "reason": reason, "sources": []}
+        except Exception:
             tw["fact"] = {
                 "conclusion": "uncertain",
-                "reason": f"Grok error: {e}",
+                "reason": "Unexpected error while contacting xAI.",
                 "sources": [],
             }
         checked.append(tw)
@@ -88,20 +94,34 @@ def get_checked(n=5):
 
 # ───────────── 3. UI ─────────────────────────────────────────────────────────
 st.set_page_config(page_title="Musk Interference Model", page_icon="🤖")
-st.title("🤖 Musk Interference Model — Live Fact Check")
-st.caption(f"Model: **{MODEL_ID}** • Cache 30 min")
+st.markdown("<h1 style='text-align: center;'>🤖 Musk Interference Model</h1>", unsafe_allow_html=True)
+st.markdown("<h3 style='text-align: center;'>Live Fact Check</h3>", unsafe_allow_html=True)
+st.markdown(f"<p style='text-align: center;'>Model: <b>{MODEL_ID}</b> • Cache 30 min</p>", unsafe_allow_html=True)
 
-# About Button (zentral platziert)
-if st.button("ℹ️ About this project"):
+if "show_readme" not in st.session_state:
+    st.session_state.show_readme = False
+if "tweet_count" not in st.session_state:
+    st.session_state.tweet_count = 5
+
+# ───────────── Buttons ───────────────────────────────────────────────────────
+col = st.columns([3, 4, 3])
+with col[1]:
+    if st.button("ℹ️ About this project", use_container_width=True):
+        st.session_state.show_readme = not st.session_state.show_readme
+
+if st.session_state.show_readme:
     with open("README.md", "r") as f:
         st.markdown(f.read(), unsafe_allow_html=True)
     st.stop()
 
-if st.button("🔄 Refresh tweets", use_container_width=True):
-    st.cache_data.clear()
-    st.experimental_rerun()
+col2 = st.columns([3, 4, 3])
+with col2[1]:
+    if st.button("🔄 Refresh tweets", use_container_width=True):
+        st.cache_data.clear()
+        st.experimental_rerun()
 
-data = get_checked()
+# ───────────── Tweets anzeigen ───────────────────────────────────────────────
+data = get_checked(st.session_state.tweet_count)
 if not data:
     st.info("No eligible tweets in the current window.")
     st.stop()
@@ -109,8 +129,7 @@ if not data:
 for t in data:
     st.subheader(t["text"])
     verdict = t["fact"]["conclusion"]
-    color   = {"true": "green", "false": "red",
-               "uncertain": "orange"}.get(verdict, "gray")
+    color = {"true": "green", "false": "red", "uncertain": "orange"}.get(verdict, "gray")
     st.markdown(
         f"**Result:** <span style='color:{color};font-weight:600'>{verdict}</span>",
         unsafe_allow_html=True,
@@ -128,3 +147,10 @@ for t in data:
     ts = dt.datetime.fromisoformat(t["created_at"].replace("Z", ""))
     st.caption(ts.strftime("%d %b %Y %H:%M UTC"))
     st.divider()
+
+# ───────────── Show More Button ──────────────────────────────────────────────
+col3 = st.columns([3, 4, 3])
+with col3[1]:
+    if st.button("➕ Show more tweets", use_container_width=True):
+        st.session_state.tweet_count += 5
+        st.experimental_rerun()
