@@ -115,7 +115,7 @@ col2 = st.columns([3, 4, 3])
 with col2[1]:
     if st.button("🔄 Refresh tweets", use_container_width=True):
         st.cache_data.clear()
-        st.experimental_rerun()
+        st.rerun()
 
 # ───────────── Tweets anzeigen ───────────────────────────────────────────────
 data = get_checked(st.session_state.tweet_count)
@@ -150,4 +150,4 @@ col3 = st.columns([3, 4, 3])
 with col3[1]:
     if st.button("➕ Show more tweets", use_container_width=True):
         st.session_state.tweet_count += 5
-        st.experimental_rerun()
+        st.rerun()
